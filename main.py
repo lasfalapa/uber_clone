@@ -240,3 +240,24 @@ def get_user_rides(user_id: int, db: Session = Depends(get_db)):
             } for r in rides
         ]
     }
+# Guarda temporariamente a última corrida pendente
+active_pending_ride = None
+
+@app.post("/api/rides/request")
+def request_ride(data: dict):
+    global active_pending_ride
+    # Simula a criação da corrida (podes adaptar ao teu código atual)
+    new_ride = {
+        "id": 6,  # Ou auto-incremento
+        "status": "requested",
+        "estimated_fare": 15.00,
+        **data
+    }
+    active_pending_ride = new_ride
+    return {"status": "success", "ride": new_ride}
+
+@app.get("/api/rides/pending")
+def get_pending_ride():
+    if active_pending_ride and active_pending_ride["status"] == "requested":
+        return {"ride": active_pending_ride}
+    return {"ride": None}

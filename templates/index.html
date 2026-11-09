@@ -176,40 +176,25 @@
     listContainer.innerHTML = '<p style="font-size:0.8em; color:#aaa;">Buscando corridas no servidor...</p>';
 
     try {
-        // Tenta buscar a última corrida ativa diretamente do servidor
-        const response = await fetch('/api/rides/active'); // Ou um endpoint que retorne a última corrida pendente
+        const response = await fetch('/api/rides/pending');
         const data = await response.json();
 
-        if (data.ride && data.ride.id) {
-            currentRideId = data.ride.id;
+        if (data.ride) {
+            const ride = data.ride;
             listContainer.innerHTML = `
                 <div class="ride-card">
-                    <p><strong>Corrida #${currentRideId}</strong></p>
-                    <p>Status: ${data.ride.status}</p>
-                    <p>Tarifa: R$ ${data.ride.estimated_fare || '10.00'}</p>
-                    <button class="btn-driver" onclick="acceptRide(${currentRideId}, 1)">Aceitar Esta Corrida</button>
+                    <p><strong>Corrida #${ride.id}</strong></p>
+                    <p>Status: ${ride.status}</p>
+                    <p>Tarifa: R$ ${ride.estimated_fare.toFixed(2)}</p>
+                    <button class="btn-driver" onclick="acceptRide(${ride.id}, 1)">Aceitar Esta Corrida</button>
                 </div>
             `;
         } else {
-            // Fallback caso usemos o ID 6 que vimos na tua imagem
-            listContainer.innerHTML = `
-                <div class="ride-card">
-                    <p><strong>Corrida #6 (Detetada)</strong></p>
-                    <p>Status: Aguardando Motorista</p>
-                    <button class="btn-driver" onclick="acceptRide(6, 1)">Aceitar Esta Corrida</button>
-                </div>
-            `;
+            listContainer.innerHTML = '<p style="font-size:0.8em; color:#888;">Nenhuma corrida pendente no momento.</p>';
         }
     } catch (err) {
         console.error("Erro ao buscar corridas:", err);
-        // Fallback direto para o ID 6 caso a rota de listagem não exista
-        listContainer.innerHTML = `
-            <div class="ride-card">
-                <p><strong>Corrida #6</strong></p>
-                <p>Status: Aguardando Motorista</p>
-                <button class="btn-driver" onclick="acceptRide(6, 1)">Aceitar Esta Corrida</button>
-            </div>
-        `;
+        listContainer.innerHTML = '<p style="font-size:0.8em; color:red;">Erro de comunicação.</p>';
     }
 }
         // Executa a aceitação da corrida diretamente pelo ID
