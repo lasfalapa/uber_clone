@@ -2,6 +2,7 @@ from fastapi import FastAPI, Depends, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
+from pydantic import BaseModel
 import redis
 import requests
 import json
@@ -17,7 +18,6 @@ templates = Jinja2Templates(directory="templates")
 
 # Conexão com o Redis (Ex: Upstash Free Redis URL ou localhost:6379)
 REDIS_URL = "redis://localhost:6379" 
-# Se usar o Upstash gratuito, a URL será algo como: "redis://default:sua_senha@sua-url.upstash.io:porta"
 redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 
 @app.get("/", response_class=HTMLResponse)
@@ -71,7 +71,6 @@ async def calculate_fare(data: dict):
         "estimated_fare": round(total_fare, 2),
         "geometry": route["geometry"]
     }
-from pydantic import BaseModel
 
 class UserCreate(BaseModel):
     name: str
@@ -215,9 +214,6 @@ def accept_ride(data: RideAccept, db: Session = Depends(get_db)):
         }
     }
 
-class UserRidesGet(BaseModel): # Ou mantenha como parâmetro na rota conforme abaixo
-    pass
-
 @app.get("/api/users/{user_id}/rides", status_code=200)
 def get_user_rides(user_id: int, db: Session = Depends(get_db)):
     user = db.query(models.User).filter(models.User.id == user_id).first()
@@ -240,24 +236,3 @@ def get_user_rides(user_id: int, db: Session = Depends(get_db)):
             } for r in rides
         ]
     }
-# Guarda temporariamente a última corrida pendente
-active_pending_ride = None
-
-@app.post("/api/rides/request")
-def request_ride(data: dict):
-    global active_pending_ride
-    # Simula a criação da corrida (podes adaptar ao teu código atual)
-    new_ride = {
-        "id": 6,  # Ou auto-incremento
-        "status": "requested",
-        "estimated_fare": 15.00,
-        **data
-    }
-    active_pending_ride = new_ride
-    return {"status": "success", "ride": new_ride}
-
-@app.get("/api/rides/pending")
-def get_pending_ride():
-    if active_pending_ride and active_pending_ride["status"] == "requested":
-        return {"ride": active_pending_ride}
-    return {"ride": None}

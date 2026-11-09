@@ -138,12 +138,6 @@
             document.getElementById('statusBox').style.display = 'block';
             document.getElementById('statusText').innerText = 'Status: Procurando motorista...';
 
-            conectarWebSocket();
-        }
-
-        function conectarWebSocket() {
-            if (activeWs) return; // Evita múltiplas conexões abertas
-            
             const wsProtocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
             activeWs = new WebSocket(wsProtocol + window.location.host + '/ws/ride-simulation');
 
@@ -157,7 +151,7 @@
                 if (data.status === 'accepted') {
                     document.getElementById('statusText').innerText = 'Status: 🚘 Motorista aceitou a corrida!';
                 } else if (data.status === 'driving') {
-                    document.getElementById('statusText').innerText = 'Status: 🚗 Motorista a caminho...';
+                    document.getElementById('statusText').innerText = 'Status: 🚗 Motorista a caminho do destino...';
                     
                     if (!carMarker) {
                         carMarker = L.marker([data.lat, data.lon], {
@@ -166,7 +160,6 @@
                     } else {
                         carMarker.setLatLng([data.lat, data.lon]);
                     }
-                    map.panTo([data.lat, data.lon]);
                 } else if (data.status === 'arrived') {
                     document.getElementById('statusText').innerText = 'Status: ✅ Corrida finalizada!';
                 }
@@ -174,49 +167,20 @@
 
             activeWs.onclose = function() {
                 console.log('Conexão encerrada.');
-                activeWs = null;
             };
         }
 
-        // Buscar corridas pendentes diretamente do servidor
-        async function loadPendingRides() {
+        function loadPendingRides() {
             const listContainer = document.getElementById('pending-rides-list');
-            listContainer.innerHTML = '<p style="font-size:0.8em; color:#aaa;">Buscando corridas no servidor...</p>';
-
-            try {
-                const response = await fetch('/api/rides/pending');
-                const data = await response.json();
-
-                if (data.ride) {
-                    const ride = data.ride;
-                    currentRideId = ride.id;
-                    
-                    // Armazena as coordenadas para desenhar a rota do motorista
-                    rideData = {
-                        pickup_lat: ride.pickup_lat,
-                        pickup_lon: ride.pickup_lon,
-                        dropoff_lat: ride.dropoff_lat,
-                        dropoff_lon: ride.dropoff_lon
-                    };
-
-                    listContainer.innerHTML = `
-                        <div class="ride-card">
-                            <p><strong>Corrida #${ride.id}</strong></p>
-                            <p>Status: ${ride.status}</p>
-                            <p>Tarifa: R$ ${ride.estimated_fare ? ride.estimated_fare.toFixed(2) : '15.00'}</p>
-                            <button class="btn-driver" onclick="acceptRide(${ride.id}, 1)">Aceitar Esta Corrida</button>
-                        </div>
-                    `;
-                } else {
-                    listContainer.innerHTML = '<p style="font-size:0.8em; color:#888;">Nenhuma corrida pendente no momento.</p>';
-                }
-            } catch (err) {
-                console.error("Erro ao buscar corridas:", err);
-                listContainer.innerHTML = '<p style="font-size:0.8em; color:red;">Erro de comunicação.</p>';
-            }
+            listContainer.innerHTML = `
+                <div class="ride-card">
+                    <p><strong>Corrida #${currentRideId || 1}</strong></p>
+                    <p>Status: Aguardando Motorista</p>
+                    <button class="btn-driver" onclick="acceptRide(${currentRideId || 1}, 1)">Aceitar Esta Corrida</button>
+                </div>
+            `;
         }
 
-        // Aceita a corrida e inicia a navegação/simulação
         async function acceptRide(rideId, driverId) {
             const listContainer = document.getElementById('pending-rides-list');
             
@@ -236,36 +200,16 @@
                     listContainer.innerHTML = `
                         <div class="ride-card" style="border-left-color: #28a745;">
                             <p><strong>Corrida #${rideId} Aceita!</strong></p>
+                            <p>Motorista ID: ${driverId}</p>
                             <p>Status: Em Andamento 🚗</p>
                         </div>
                     `;
-                    
-                    // Desenha os marcadores e a linha da rota no mapa do motorista
-                    if (rideData.pickup_lat && rideData.dropoff_lat) {
-                        if (pickupMarker) map.removeLayer(pickupMarker);
-                        if (dropoffMarker) map.removeLayer(dropoffMarker);
-                        
-                        pickupMarker = L.marker([rideData.pickup_lat, rideData.pickup_lon]).addTo(map).bindPopup('Partida do Passageiro').openPopup();
-                        dropoffMarker = L.marker([rideData.dropoff_lat, rideData.dropoff_lon]).addTo(map).bindPopup('Destino Final');
-
-                        if (routeLayer) map.removeLayer(routeLayer);
-                        routeLayer = L.polyline([
-                            [rideData.pickup_lat, rideData.pickup_lon],
-                            [rideData.dropoff_lat, rideData.dropoff_lon]
-                        ], { color: '#28a745', weight: 6, dashArray: '10, 10' }).addTo(map);
-                        
-                        map.fitBounds(routeLayer.getBounds());
-                    }
-
-                    // Inicia a escuta da movimentação em tempo real no app do motorista
-                    conectarWebSocket();
-
-                    alert("Corrida aceita! A rota para o passageiro foi traçada no seu mapa.");
+                    alert("Corrida aceita com sucesso! A simulação foi iniciada.");
                 } else {
-                    alert("Erro ao aceitar corrida.");
+                    alert("Erro: " + (resData.error || "Não foi possível aceitar a corrida."));
                 }
             } catch (err) {
-                console.error("Erro ao aceitar:", err);
+                console.error("Erro ao aceitar corrida:", err);
                 alert("Falha na comunicação com o servidor.");
             }
         }
@@ -282,7 +226,6 @@
             carMarker = null;
             routeLayer = null;
             currentRideId = null;
-            activeWs = null;
             state = 'PICKUP';
             
             document.getElementById('instruction').innerHTML = 'Clique no mapa para definir o ponto de <strong>Partida</strong>.';
