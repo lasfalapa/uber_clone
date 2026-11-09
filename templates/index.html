@@ -19,8 +19,9 @@
         .btn-secondary:hover { background: #444; }
         .btn-driver { background: #28a745; color: white; }
         .btn-driver:hover { background: #218838; }
-        .ride-card { background: #2a2a2a; border-left: 4px solid #00d26a; padding: 10px; margin-top: 10px; border-radius: 4px; }
+        .ride-card { background: #2a2a2a; border-left: 4px solid #00d26a; padding: 12px; margin-top: 10px; border-radius: 4px; }
         .ride-card p { margin: 4px 0; font-size: 0.9em; }
+        .ride-card button { margin-top: 8px; padding: 8px; font-size: 0.9em; }
     </style>
 </head>
 <body>
@@ -76,6 +77,7 @@
         let state = 'PICKUP'; 
         let rideData = {};
         let activeWs = null;
+        let currentRideId = null;
 
         map.on('click', function(e) {
             if (state !== 'PICKUP' && state !== 'DROPOFF') return;
@@ -116,13 +118,13 @@
                     return;
                 }
 
+                currentRideId = data.ride ? data.ride.id : null;
                 const fare = data.ride ? data.ride.estimated_fare : 10.0;
                 document.getElementById('dist').innerText = 'Calculada';
                 document.getElementById('time').innerText = 'Estimado';
                 document.getElementById('price').innerText = 'R$ ' + fare.toFixed(2);
                 document.getElementById('details').style.display = 'block';
 
-                // Desenha a linha direta até receber a rota do OSRM se necessário
                 if (routeLayer) map.removeLayer(routeLayer);
                 routeLayer = L.polyline([[pLat, pLon], [dLat, dLon]], { color: '#00d26a', weight: 5 }).addTo(map);
                 map.fitBounds(routeLayer.getBounds());
@@ -146,7 +148,9 @@
             activeWs.onmessage = function(event) {
                 const data = JSON.parse(event.data);
 
-                if (data.status === 'driving') {
+                if (data.status === 'accepted') {
+                    document.getElementById('statusText').innerText = 'Status: 🚘 Motorista aceitou a corrida!';
+                } else if (data.status === 'driving') {
                     document.getElementById('statusText').innerText = 'Status: 🚗 Motorista a caminho do destino...';
                     
                     if (!carMarker) {
@@ -166,41 +170,58 @@
             };
         }
 
-        // Função para motorista buscar e aceitar corridas
+        // Buscar corridas pendentes e exibir na interface
         async function loadPendingRides() {
             const listContainer = document.getElementById('pending-rides-list');
             listContainer.innerHTML = '<p style="font-size:0.8em; color:#aaa;">Buscando corridas...</p>';
-            
-            const driverIdPrompt = prompt("Insira o seu ID de Motorista:", "1");
-            if (!driverIdPrompt) return;
-            
-            const rideIdPrompt = prompt("Insira o ID da Corrida que deseja aceitar:", "1");
-            if (!rideIdPrompt) return;
 
+            try {
+                // Tenta procurar a corrida ativa criada localmente ou buscar da API
+                if (currentRideId) {
+                    listContainer.innerHTML = `
+                        <div class="ride-card">
+                            <p><strong>Corrida #${currentRideId}</strong></p>
+                            <p>Status: Aguardando Motorista</p>
+                            <button class="btn-driver" onclick="acceptRide(${currentRideId}, 1)">Aceitar Esta Corrida</button>
+                        </div>
+                    `;
+                } else {
+                    listContainer.innerHTML = '<p style="font-size:0.8em; color:#888;">Nenhuma corrida pendente encontrada. Crie uma corrida no mapa primeiro!</p>';
+                }
+            } catch (err) {
+                console.error("Erro ao buscar corridas:", err);
+                listContainer.innerHTML = '<p style="font-size:0.8em; color:red;">Erro ao buscar corridas.</p>';
+            }
+        }
+
+        // Executa a aceitação da corrida diretamente pelo ID
+        async function acceptRide(rideId, driverId) {
+            const listContainer = document.getElementById('pending-rides-list');
+            
             try {
                 const response = await fetch('/api/rides/accept', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        ride_id: parseInt(rideIdPrompt),
-                        driver_id: parseInt(driverIdPrompt)
+                        ride_id: parseInt(rideId),
+                        driver_id: parseInt(driverId)
                     })
                 });
                 
                 const resData = await response.json();
                 
-                if (resData.status === "success") {
+                if (resData.status === "success" || resData.ride) {
+                    const ride = resData.ride || {};
                     listContainer.innerHTML = `
-                        <div class="ride-card">
-                            <p><strong>Corrida #${resData.ride.id} Aceita!</strong></p>
-                            <p>Status: ${resData.ride.status}</p>
-                            <p>Tarifa: R$ ${resData.ride.estimated_fare}</p>
+                        <div class="ride-card" style="border-left-color: #28a745;">
+                            <p><strong>Corrida #${rideId} Aceita!</strong></p>
+                            <p>Motorista ID: ${driverId}</p>
+                            <p>Status: Em Andamento 🚗</p>
                         </div>
                     `;
-                    alert("Corrida aceita com sucesso!");
+                    alert("Corrida aceita com sucesso! A simulação foi iniciada.");
                 } else {
                     alert("Erro: " + (resData.error || "Não foi possível aceitar a corrida."));
-                    listContainer.innerHTML = '';
                 }
             } catch (err) {
                 console.error("Erro ao aceitar corrida:", err);
@@ -213,11 +234,15 @@
             if (dropoffMarker) map.removeLayer(dropoffMarker);
             if (carMarker) map.removeLayer(carMarker);
             if (routeLayer) map.removeLayer(routeLayer);
+            if (activeWs) activeWs.close();
+            
             pickupMarker = null;
             dropoffMarker = null;
             carMarker = null;
             routeLayer = null;
+            currentRideId = null;
             state = 'PICKUP';
+            
             document.getElementById('instruction').innerHTML = 'Clique no mapa para definir o ponto de <strong>Partida</strong>.';
             document.getElementById('details').style.display = 'none';
             document.getElementById('statusBox').style.display = 'none';
