@@ -2,7 +2,6 @@ from fastapi import FastAPI, Depends, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
 import redis
 import requests
 import json
@@ -18,10 +17,8 @@ templates = Jinja2Templates(directory="templates")
 
 # Conexão com o Redis (Ex: Upstash Free Redis URL ou localhost:6379)
 REDIS_URL = "redis://localhost:6379" 
+# Se usar o Upstash gratuito, a URL será algo como: "redis://default:sua_senha@sua-url.upstash.io:porta"
 redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
-
-# Variável global de fallback para sessões em memória
-active_pending_ride = None
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
@@ -74,6 +71,7 @@ async def calculate_fare(data: dict):
         "estimated_fare": round(total_fare, 2),
         "geometry": route["geometry"]
     }
+from pydantic import BaseModel
 
 class UserCreate(BaseModel):
     name: str
@@ -135,7 +133,7 @@ def register_driver(driver: DriverCreate, db: Session = Depends(get_db)):
     }
 
 class RideCreate(BaseModel):
-    user_id: int = 1
+    user_id: int
     pickup_lat: float
     pickup_lon: float
     dropoff_lat: float
@@ -143,7 +141,9 @@ class RideCreate(BaseModel):
 
 @app.post("/api/rides/request", status_code=201)
 def request_ride(ride_data: RideCreate, db: Session = Depends(get_db)):
-    global active_pending_ride
+    user = db.query(models.User).filter(models.User.id == ride_data.user_id).first()
+    if not user:
+        return {"error": "Utilizador não encontrado."}
     
     url = f"http://router.project-osrm.org/route/v1/driving/{ride_data.pickup_lon},{ride_data.pickup_lat};{ride_data.dropoff_lon},{ride_data.dropoff_lat}?overview=false"
     try:
@@ -154,9 +154,9 @@ def request_ride(ride_data: RideCreate, db: Session = Depends(get_db)):
             duration_min = route["duration"] / 60.0
             fare = round(4.50 + (distance_km * 1.80) + (duration_min * 0.35), 2)
         else:
-            fare = 15.0
+            fare = 10.0
     except:
-        fare = 15.0
+        fare = 10.0
 
     new_ride = models.Ride(
         user_id=ride_data.user_id,
@@ -167,116 +167,56 @@ def request_ride(ride_data: RideCreate, db: Session = Depends(get_db)):
         fare=fare,
         status="PENDING"
     )
-    
-    try:
-        db.add(new_ride)
-        db.commit()
-        db.refresh(new_ride)
-        ride_dict = {
-            "id": new_ride.id,
-            "user_id": new_ride.user_id,
-            "pickup_lat": new_ride.pickup_lat,
-            "pickup_lon": new_ride.pickup_lon,
-            "dropoff_lat": new_ride.dropoff_lat,
-            "dropoff_lon": new_ride.dropoff_lon,
-            "estimated_fare": new_ride.fare,
-            "status": new_ride.status
-        }
-    except Exception as e:
-        db.rollback()
-        # Fallback se a tabela de utilizador não estiver populada
-        ride_dict = {
-            "id": 1,
-            "user_id": ride_data.user_id,
-            "pickup_lat": ride_data.pickup_lat,
-            "pickup_lon": ride_data.pickup_lon,
-            "dropoff_lat": ride_data.dropoff_lat,
-            "dropoff_lon": ride_data.dropoff_lon,
-            "estimated_fare": fare,
-            "status": "PENDING"
-        }
-
-    active_pending_ride = ride_dict
+    db.add(new_ride)
+    db.commit()
+    db.refresh(new_ride)
     
     return {
         "status": "success",
         "message": "Corrida solicitada com sucesso!",
-        "ride": ride_dict
+        "ride": {
+            "id": new_ride.id,
+            "user_id": new_ride.user_id,
+            "estimated_fare": new_ride.fare,
+            "status": new_ride.status
+        }
     }
-
-@app.get("/api/rides/pending")
-def get_pending_ride(db: Session = Depends(get_db)):
-    global active_pending_ride
     
-    try:
-        # Tenta buscar a última corrida PENDING na base de dados PostgreSQL
-        pending_ride = db.query(models.Ride).filter(models.Ride.status == "PENDING").order_by(models.Ride.id.desc()).first()
-        if pending_ride:
-            return {
-                "ride": {
-                    "id": pending_ride.id,
-                    "user_id": pending_ride.user_id,
-                    "pickup_lat": pending_ride.pickup_lat,
-                    "pickup_lon": pending_ride.pickup_lon,
-                    "dropoff_lat": pending_ride.dropoff_lat,
-                    "dropoff_lon": pending_ride.dropoff_lon,
-                    "estimated_fare": pending_ride.fare,
-                    "status": pending_ride.status
-                }
-            }
-    except Exception as e:
-        pass
-        
-    # Retorna o fallback da memória se existir
-    if active_pending_ride and active_pending_ride.get("status") in ["PENDING", "requested"]:
-        return {"ride": active_pending_ride}
-        
-    return {"ride": None}
-
 class RideAccept(BaseModel):
     ride_id: int
     driver_id: int
 
 @app.post("/api/rides/accept", status_code=200)
 def accept_ride(data: RideAccept, db: Session = Depends(get_db)):
-    global active_pending_ride
+    ride = db.query(models.Ride).filter(models.Ride.id == data.ride_id).first()
+    if not ride:
+        return {"error": "Corrida não encontrada."}
+    if ride.status != "PENDING":
+        return {"error": f"Esta corrida já não está disponível (status atual: {ride.status})."}
     
-    try:
-        ride = db.query(models.Ride).filter(models.Ride.id == data.ride_id).first()
-        if ride:
-            ride.driver_id = data.driver_id
-            ride.status = "ACCEPTED"
-            db.commit()
-            db.refresh(ride)
-            
-            return {
-                "status": "success",
-                "message": "Corrida aceita pelo motorista com sucesso!",
-                "ride": {
-                    "id": ride.id,
-                    "user_id": ride.user_id,
-                    "driver_id": ride.driver_id,
-                    "status": ride.status,
-                    "estimated_fare": ride.fare
-                }
-            }
-    except Exception as e:
-        db.rollback()
-
-    if active_pending_ride:
-        active_pending_ride["status"] = "ACCEPTED"
-        active_pending_ride["driver_id"] = data.driver_id
-
+    driver = db.query(models.Driver).filter(models.Driver.id == data.driver_id).first()
+    if not driver:
+        return {"error": "Motorista não encontrado."}
+    
+    ride.driver_id = data.driver_id
+    ride.status = "ACCEPTED"
+    db.commit()
+    db.refresh(ride)
+    
     return {
         "status": "success",
-        "message": "Corrida aceita com sucesso!",
+        "message": "Corrida aceita pelo motorista com sucesso!",
         "ride": {
-            "id": data.ride_id,
-            "driver_id": data.driver_id,
-            "status": "ACCEPTED",
-            "estimated_fare": 15.00
+            "id": ride.id,
+            "user_id": ride.user_id,
+            "driver_id": ride.driver_id,
+            "status": ride.status,
+            "estimated_fare": ride.fare
         }
     }
+
+class UserRidesGet(BaseModel): # Ou mantenha como parâmetro na rota conforme abaixo
+    pass
 
 @app.get("/api/users/{user_id}/rides", status_code=200)
 def get_user_rides(user_id: int, db: Session = Depends(get_db)):
@@ -300,3 +240,24 @@ def get_user_rides(user_id: int, db: Session = Depends(get_db)):
             } for r in rides
         ]
     }
+# Guarda temporariamente a última corrida pendente
+active_pending_ride = None
+
+@app.post("/api/rides/request")
+def request_ride(data: dict):
+    global active_pending_ride
+    # Simula a criação da corrida (podes adaptar ao teu código atual)
+    new_ride = {
+        "id": 6,  # Ou auto-incremento
+        "status": "requested",
+        "estimated_fare": 15.00,
+        **data
+    }
+    active_pending_ride = new_ride
+    return {"status": "success", "ride": new_ride}
+
+@app.get("/api/rides/pending")
+def get_pending_ride():
+    if active_pending_ride and active_pending_ride["status"] == "requested":
+        return {"ride": active_pending_ride}
+    return {"ride": None}
